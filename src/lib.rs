@@ -42,6 +42,9 @@ pub mod binder_calls {
         bstats:    RawBinderService,
         idle_code: u32,
     }
+    // RawBinderService wraps a *mut c_void dlopen handle. libbinder transactions
+    // are thread-safe, and the handle is immutable after construction.
+    unsafe impl Sync for BinderCtx {}
 
     impl BinderCtx {
         pub fn open() -> Result<Self, String> {
