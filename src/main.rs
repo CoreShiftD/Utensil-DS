@@ -56,7 +56,7 @@ mod binder_calls {
 
             let dc = find_transaction_code(
                 JAR,
-                "Landroid/os/IBatteryStats$Stub;",
+                "Lcom/android/internal/app/IBatteryStats$Stub;",
                 "TRANSACTION_noteDeviceIdleMode",
             )
             .ok_or("dex: TRANSACTION_noteDeviceIdleMode missing")?;

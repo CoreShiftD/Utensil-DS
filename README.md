@@ -55,7 +55,7 @@ Resolved at runtime from `/system/framework/framework.jar` via `coreshift_core::
 | Service | Descriptor | Field |
 |---|---|---|
 | `power` | `Landroid/os/IPowerManager$Stub;` | `TRANSACTION_isInteractive` |
-| `batterystats` | `Landroid/os/IBatteryStats$Stub;` | `TRANSACTION_noteDeviceIdleMode` |
+| `batterystats` | `Lcom/android/internal/app/IBatteryStats$Stub;` | `TRANSACTION_noteDeviceIdleMode` |
 
 No hardcoded numeric codes — version-agnostic across Android 10–15+.
 
