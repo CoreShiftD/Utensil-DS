@@ -1,0 +1,28 @@
+[package]
+name = "utensil-ds"
+version = "0.1.0"
+edition = "2021"
+description = "Android device-idle state machine daemon"
+license = "MPL-2.0"
+repository = "https://github.com/CoreShiftD/Utensil-DS"
+homepage = "https://github.com/CoreShiftD/Utensil-DS"
+readme = "README.md"
+keywords = ["android", "idle", "battery", "binder", "daemon"]
+categories = ["os::linux-apis"]
+
+[[bin]]
+name = "utensil-ds"
+path = "src/main.rs"
+
+[dependencies]
+coreshift-core = "1.2.10"
+coreshift-foreground = "*"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+debug = 0
+incremental = false
+strip = "none"
