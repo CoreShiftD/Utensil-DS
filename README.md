@@ -15,7 +15,7 @@ Android device-idle state machine daemon. Watches `debug.tracing.screen_state` a
                ▼                         ▲           │
     ┌──────────────────┐                 │ cancel    │
     │  LIGHT IDLE WAIT │─────────────────┘           │
-    │   sleep 90s      │  (Arc<AtomicBool> cancel)   │
+    │  timerfd 90s     │  (eventfd cancel via epoll) │
     └────────┬─────────┘                             │
              │ 90s elapsed                           │
              ▼                                       │
@@ -32,7 +32,7 @@ Android device-idle state machine daemon. Watches `debug.tracing.screen_state` a
              │                                       │
     ┌────────▼─────────┐                             │
     │  DEEP IDLE WAIT  │─────────────────────────────┘
-    │   sleep 360s     │  (cancel still checked)
+    │  timerfd 360s    │  (eventfd cancel via epoll)
     └────────┬─────────┘
              │ 360s elapsed
              ▼
@@ -46,7 +46,7 @@ Android device-idle state machine daemon. Watches `debug.tracing.screen_state` a
 
 ### Timer cancellation
 
-Each screen-off event spawns a thread running the idle sequence. An `Arc<AtomicBool>` cancel flag is checked every 1 second tick. Screen-on sets the flag and joins the thread before continuing.
+Each screen-off event spawns a thread running the idle sequence with its own `Reactor` (epoll), a `timerfd` for the delay, and a shared `Arc<Fd>` eventfd as the cancel signal. The thread blocks in `epoll_wait` with no wakeups during the wait. Screen-on writes `1` to the eventfd; the idle thread wakes immediately and exits. Zero polling — cancellation latency is kernel scheduler latency only.
 
 ### Binder transaction codes
 
