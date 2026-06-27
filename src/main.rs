@@ -87,29 +87,89 @@ mod binder_calls {
 
 mod idle_fsm {
     use crate::binder_calls::{BinderCtx, IDLE_DEEP, IDLE_LIGHT};
-    use coreshift_core::log_info;
-    use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+    use coreshift_core::reactor::{Event, Fd, Reactor, Token};
+    use coreshift_core::{log_error, log_info};
+    use std::sync::Arc;
     use std::time::Duration;
 
     const TAG: &str = "utensil-ds:fsm";
 
-    fn sleep_cancellable(secs: u64, cancel: &Arc<AtomicBool>) -> bool {
-        for _ in 0..secs {
-            if cancel.load(Ordering::Relaxed) { return false; }
-            std::thread::sleep(Duration::from_secs(1));
-        }
-        !cancel.load(Ordering::Relaxed)
+    pub fn make_cancel() -> Arc<Fd> {
+        Arc::new(Fd::eventfd(0).expect("eventfd for cancel"))
     }
 
-    pub fn run(ctx: &BinderCtx, cancel: Arc<AtomicBool>) {
-        log_info!(TAG, "screen off — light idle in 90s");
-        if !sleep_cancellable(90, &cancel) { log_info!(TAG, "cancelled (light wait)"); return; }
+    /// Block on epoll until timer fires or cancel eventfd is written.
+    /// Returns true if timer fired, false if cancelled.
+    fn wait_timer(
+        reactor: &mut Reactor,
+        timer_tok: Token,
+        cancel_tok: Token,
+        events: &mut Vec<Event>,
+    ) -> bool {
+        loop {
+            events.clear();
+            match reactor.wait(events, 2, -1) {
+                Err(_) | Ok(0) => continue,
+                Ok(_) => {}
+            }
+            for ev in events.iter() {
+                if ev.token == cancel_tok { return false; }
+                if ev.token == timer_tok  { return true; }
+            }
+        }
+    }
 
-        if ctx.is_interactive() { log_info!(TAG, "screen back on — abort"); return; }
+    /// Drain a timerfd after EPOLLET fires (required to re-arm edge trigger).
+    fn drain(fd: &Fd) {
+        let mut buf = [0u8; 8];
+        while let Ok(Some(_)) = fd.read_slice(&mut buf) {}
+    }
+
+    pub fn run(ctx: &BinderCtx, cancel: Arc<Fd>) {
+        let mut reactor = match Reactor::new() {
+            Ok(r) => r,
+            Err(e) => { log_error!(TAG, "Reactor::new: {e}"); return; }
+        };
+        let timer = match Fd::timerfd() {
+            Ok(f) => f,
+            Err(e) => { log_error!(TAG, "Fd::timerfd: {e}"); return; }
+        };
+
+        let cancel_tok = match reactor.add(&cancel, true, false) {
+            Ok(t) => t,
+            Err(e) => { log_error!(TAG, "reactor.add cancel: {e}"); return; }
+        };
+        let timer_tok = match reactor.add(&timer, true, false) {
+            Ok(t) => t,
+            Err(e) => { log_error!(TAG, "reactor.add timer: {e}"); return; }
+        };
+
+        let mut events = Vec::new();
+
+        // ── Phase 1: light idle (90s) ─────────────────────────────────────────
+        log_info!(TAG, "screen off — light idle in 90s");
+        if let Err(e) = timer.set_timer_oneshot(Some(Duration::from_secs(90))) {
+            log_error!(TAG, "arm timer 90s: {e}"); return;
+        }
+        if !wait_timer(&mut reactor, timer_tok, cancel_tok, &mut events) {
+            log_info!(TAG, "cancelled (light wait)"); return;
+        }
+        drain(&timer);
+
+        if ctx.is_interactive() {
+            log_info!(TAG, "isInteractive=true after 90s — abort"); return;
+        }
         ctx.note_idle(IDLE_LIGHT);
 
-        log_info!(TAG, "light idle — deep idle in 360s");
-        if !sleep_cancellable(360, &cancel) { log_info!(TAG, "cancelled (deep wait)"); return; }
+        // ── Phase 2: deep idle (360s) ─────────────────────────────────────────
+        log_info!(TAG, "light idle entered — deep idle in 360s");
+        if let Err(e) = timer.set_timer_oneshot(Some(Duration::from_secs(360))) {
+            log_error!(TAG, "arm timer 360s: {e}"); return;
+        }
+        if !wait_timer(&mut reactor, timer_tok, cancel_tok, &mut events) {
+            log_info!(TAG, "cancelled (deep wait)"); return;
+        }
+        drain(&timer);
 
         ctx.note_idle(IDLE_DEEP);
         log_info!(TAG, "deep idle entered");
@@ -117,10 +177,11 @@ mod idle_fsm {
 }
 
 use binder_calls::BinderCtx;
+use coreshift_core::reactor::Fd;
 use coreshift_core::{log_error, log_info, log_warn};
-use idle_fsm::run as run_idle;
+use idle_fsm::{make_cancel, run as run_idle};
 use prop_wait::ScreenProp;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::Arc;
 use std::thread;
 
 const TAG: &str = "utensil-ds";
@@ -138,7 +199,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    let mut cancel: Option<Arc<AtomicBool>> = None;
+    let mut cancel: Option<Arc<Fd>> = None;
     let mut idle_handle: Option<thread::JoinHandle<()>> = None;
 
     loop {
@@ -150,16 +211,21 @@ fn main() {
         let screen_on = value.trim() != "0";
         log_info!(TAG, "screen_state={value:?} on={screen_on}");
 
-        if let Some(f) = cancel.take() { f.store(true, Ordering::Relaxed); }
-        if let Some(h) = idle_handle.take() { let _ = h.join(); }
+        // Signal any running idle sequence to stop immediately.
+        if let Some(f) = cancel.take() {
+            let _ = f.write_u64(1);
+        }
+        if let Some(h) = idle_handle.take() {
+            let _ = h.join();
+        }
 
         if !screen_on {
-            let flag = Arc::new(AtomicBool::new(false));
-            cancel = Some(flag.clone());
+            let cancel_fd = make_cancel();
+            cancel = Some(cancel_fd.clone());
             // Safety: ctx lives for entire process lifetime; thread joins before next iteration.
             let ctx_ptr = &ctx as *const BinderCtx as usize;
             idle_handle = Some(thread::spawn(move || {
-                run_idle(unsafe { &*(ctx_ptr as *const BinderCtx) }, flag);
+                run_idle(unsafe { &*(ctx_ptr as *const BinderCtx) }, cancel_fd);
             }));
         }
     }
