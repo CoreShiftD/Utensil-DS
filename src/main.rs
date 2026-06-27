@@ -31,7 +31,7 @@ mod prop_wait {
 mod binder_calls {
     use coreshift_core::binder::RawBinderService;
     use coreshift_core::dex::find_transaction_code;
-    use coreshift_core::{log_error, log_info, log_warn};
+    use coreshift_core::{log_info, log_warn};
 
     const JAR: &str = "/system/framework/framework.jar";
     const TAG: &str = "utensil-ds:binder";
@@ -39,21 +39,12 @@ mod binder_calls {
     pub const IDLE_DEEP: i32 = 2;
 
     pub struct BinderCtx {
-        power:            RawBinderService,
-        bstats:           RawBinderService,
-        interactive_code: u32,
-        idle_code:        u32,
+        bstats:    RawBinderService,
+        idle_code: u32,
     }
 
     impl BinderCtx {
         pub fn open() -> Result<Self, String> {
-            let ic = find_transaction_code(
-                JAR,
-                "Landroid/os/IPowerManager$Stub;",
-                "TRANSACTION_isInteractive",
-            )
-            .ok_or("dex: TRANSACTION_isInteractive missing")?;
-
             let dc = find_transaction_code(
                 JAR,
                 "Lcom/android/internal/app/IBatteryStats$Stub;",
@@ -61,19 +52,10 @@ mod binder_calls {
             )
             .ok_or("dex: TRANSACTION_noteDeviceIdleMode missing")?;
 
-            log_info!(TAG, "tx codes: isInteractive={ic} noteDeviceIdleMode={dc}");
+            log_info!(TAG, "tx code: noteDeviceIdleMode={dc}");
 
-            let power  = RawBinderService::open("power").map_err(|e| e.to_string())?;
             let bstats = RawBinderService::open("batterystats").map_err(|e| e.to_string())?;
-
-            Ok(Self { power, bstats, interactive_code: ic, idle_code: dc })
-        }
-
-        pub fn is_interactive(&self) -> bool {
-            match self.power.transact_bool(self.interactive_code) {
-                Ok(v) => v,
-                Err(e) => { log_error!(TAG, "isInteractive: {e}"); true }
-            }
+            Ok(Self { bstats, idle_code: dc })
         }
 
         pub fn note_idle(&self, mode: i32) {
@@ -88,7 +70,8 @@ mod binder_calls {
 mod idle_fsm {
     use crate::binder_calls::{BinderCtx, IDLE_DEEP, IDLE_LIGHT};
     use coreshift_core::reactor::{Event, Fd, Reactor, Token};
-    use coreshift_core::{log_error, log_info};
+    use coreshift_core::log_info;
+    use coreshift_core::log_error;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -155,10 +138,6 @@ mod idle_fsm {
             log_info!(TAG, "cancelled (light wait)"); return;
         }
         drain(&timer);
-
-        if ctx.is_interactive() {
-            log_info!(TAG, "isInteractive=true after 90s — abort"); return;
-        }
         ctx.note_idle(IDLE_LIGHT);
 
         // ── Phase 2: deep idle (360s) ─────────────────────────────────────────
@@ -208,7 +187,8 @@ fn main() {
             None => { log_warn!(TAG, "wait_change None; retry"); continue; }
         };
 
-        let screen_on = value.trim() != "0";
+        // Display.STATE_OFF=1, STATE_ON=2, STATE_DOZE=3+. Treat only ON as on.
+        let screen_on = value.trim() == "2";
         log_info!(TAG, "screen_state={value:?} on={screen_on}");
 
         // Signal any running idle sequence to stop immediately.
