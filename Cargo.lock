@@ -13,9 +13,9 @@ dependencies = [
 
 [[package]]
 name = "coreshift-foreground"
-version = "0.1.7"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3cf82748f21e35c8c70eefce7ae705d8c9eca49b6ecc88a2c438cc7fb398f06"
+checksum = "3923c474c0f03b751f0dea5109f7065e6bcbcbebb96d0ea07b95b294b5a3e197"
 dependencies = [
  "coreshift-core",
 ]
@@ -28,7 +28,7 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "utensil-ds"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "coreshift-core",
  "coreshift-foreground",

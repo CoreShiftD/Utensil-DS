@@ -49,7 +49,7 @@ fn main() {
             cancel = Some(cancel_fd.clone());
             let ctx_ptr = &ctx as *const BinderCtx as usize;
             idle_handle = Some(thread::spawn(move || {
-                run_idle(unsafe { &*(ctx_ptr as *const BinderCtx) }, cancel_fd);
+                run_idle(unsafe { &*(ctx_ptr as *const BinderCtx) }, cancel_fd, None);
             }));
         }
     }

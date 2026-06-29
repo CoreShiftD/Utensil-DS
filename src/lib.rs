@@ -72,6 +72,7 @@ pub mod binder_calls {
 
 pub mod idle_fsm {
     use crate::binder_calls::{BinderCtx, IDLE_DEEP, IDLE_LIGHT};
+    use coreshift_core::android_property::android_property_set;
     use coreshift_core::reactor::{Event, Fd, Reactor, Token};
     use coreshift_core::{log_error, log_info};
     use std::sync::Arc;
@@ -107,7 +108,10 @@ pub mod idle_fsm {
         while let Ok(Some(_)) = fd.read_slice(&mut buf) {}
     }
 
-    pub fn run(ctx: &BinderCtx, cancel: Arc<Fd>) {
+    /// Run the idle FSM. Writes `idle_state_prop` ("light"/"deep") after each
+    /// phase transition so property-watchers (e.g. the WD thread) are notified.
+    /// Pass `None` to skip property writes (standalone / no WD integration).
+    pub fn run(ctx: &BinderCtx, cancel: Arc<Fd>, idle_state_prop: Option<&str>) {
         let mut reactor = match Reactor::new() {
             Ok(r) => r,
             Err(e) => { log_error!(TAG, "Reactor::new: {e}"); return; }
@@ -137,8 +141,9 @@ pub mod idle_fsm {
         }
         drain(&timer);
         ctx.note_idle(IDLE_LIGHT);
-
+        if let Some(prop) = idle_state_prop { let _ = android_property_set(prop, "light"); }
         log_info!(TAG, "light idle entered — deep idle in 360s");
+
         if let Err(e) = timer.set_timer_oneshot(Some(Duration::from_secs(360))) {
             log_error!(TAG, "arm timer 360s: {e}"); return;
         }
@@ -146,8 +151,8 @@ pub mod idle_fsm {
             log_info!(TAG, "cancelled (deep wait)"); return;
         }
         drain(&timer);
-
         ctx.note_idle(IDLE_DEEP);
+        if let Some(prop) = idle_state_prop { let _ = android_property_set(prop, "deep"); }
         log_info!(TAG, "deep idle entered");
     }
 }
