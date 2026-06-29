@@ -20,6 +20,10 @@ pub mod prop_wait {
             Some(Self { info, serial })
         }
 
+        pub fn read_current(&self) -> Option<String> {
+            android_property_read(self.info).ok().map(|v| v.value)
+        }
+
         pub fn wait_change(&mut self) -> Option<String> {
             let s = android_property_wait(self.info, self.serial, None).ok()??;
             self.serial = s;
@@ -57,6 +61,14 @@ pub mod screen_source {
                     log_warn!(TAG, "display binder failed: {e}");
                     None
                 }
+            }
+        }
+
+        /// Read current screen state without blocking. Returns `None` if unknown.
+        pub fn current(&self) -> Option<bool> {
+            match self {
+                ScreenSource::Prop(s) => s.read_current().map(|v| v.trim() == "2"),
+                ScreenSource::Binder { binder, .. } => binder.is_interactive().ok(),
             }
         }
 
