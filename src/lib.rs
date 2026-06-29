@@ -28,6 +28,60 @@ pub mod prop_wait {
     }
 }
 
+pub mod screen_source {
+    use coreshift_core::binder::DisplayManagerBinder;
+    use coreshift_core::reactor::Fd;
+    use coreshift_core::{log_info, log_warn};
+    use super::prop_wait::ScreenProp;
+
+    const TAG: &str = "utensil-ds:screen";
+
+    pub enum ScreenSource {
+        Prop(ScreenProp),
+        Binder { binder: DisplayManagerBinder, efd: Fd },
+    }
+
+    impl ScreenSource {
+        /// Try prop first; fall back to IDisplayManagerCallback binder.
+        pub fn open() -> Option<Self> {
+            if let Some(s) = ScreenProp::open() {
+                log_info!(TAG, "using screen_state property");
+                return Some(ScreenSource::Prop(s));
+            }
+            match DisplayManagerBinder::open_with_callback() {
+                Ok((binder, efd)) => {
+                    log_info!(TAG, "using IDisplayManagerCallback binder (prop absent)");
+                    Some(ScreenSource::Binder { binder, efd })
+                }
+                Err(e) => {
+                    log_warn!(TAG, "display binder failed: {e}");
+                    None
+                }
+            }
+        }
+
+        /// Block until screen state changes. Returns `true`=on, `false`=off.
+        pub fn wait_screen_on(&mut self) -> Option<bool> {
+            match self {
+                ScreenSource::Prop(s) => {
+                    let v = s.wait_change()?;
+                    Some(v.trim() == "2")
+                }
+                ScreenSource::Binder { binder, efd } => {
+                    if let Err(e) = efd.read_u64_blocking() {
+                        log_warn!(TAG, "eventfd read: {e}");
+                        return None;
+                    }
+                    match binder.is_interactive() {
+                        Ok(v) => Some(v),
+                        Err(e) => { log_warn!(TAG, "isInteractive: {e}"); None }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub mod binder_calls {
     use coreshift_core::binder::RawBinderService;
     use coreshift_core::dex::find_transaction_code;
